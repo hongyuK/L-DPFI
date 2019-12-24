@@ -1,0 +1,1172 @@
+1
+DCT1d(const double* in, int stride, double* out) {
+  for (int x = 0; x < 8; ++x) {
+    out[x * stride] = 0.0;
+    for (int u = 0; u < 8; ++u) {
+      out[x * stride] += kDCTMatrix[8 * x + u] * in[u * stride];
+    }
+  }
+}
+1
+----------
+2
+IDCT1d(const double* in, int stride, double* out) {
+  for (int x = 0; x < 8; ++x) {
+    out[x * stride] = 0.0;
+    for (int u = 0; u < 8; ++u) {
+      out[x * stride] += kDCTMatrix[8 * u + x] * in[u * stride];
+    }
+  }
+}
+1
+----------
+3
+TransformBlock(double block[64], Transform1d f) {
+  double tmp[64];
+  for (int x = 0; x < 8; ++x) {
+    f(&block[x], 8, &tmp[x]);
+  }
+  for (int y = 0; y < 8; ++y) {
+    f(&tmp[8 * y], 1, &block[8 * y]);
+  }
+}
+1
+----------
+4
+SetDepth(int p0, HuffmanTree *pool, uint8_t *depth, int max_depth) {
+  int stack[17];
+  int level = 0;
+  int p = p0;
+  assert(max_depth <= 16);
+  stack[0] = -1;
+  while (true) {
+    if (pool[p].index_left_ >= 0) {
+      level++;
+      if (level > max_depth) return false;
+      stack[level] = pool[p].index_right_or_value_;
+      p = pool[p].index_left_;
+      continue;
+    } else {
+      depth[pool[p].index_right_or_value_] = static_cast<uint8_t>(level);
+    }
+    while (level >= 0 && stack[level] == -1) level--;
+    if (level < 0) return true;
+    p = stack[level];
+    stack[level] = -1;
+  }
+}
+0
+----------
+5
+SortHuffmanTree(const HuffmanTree& v0,
+                                   const HuffmanTree& v1) {
+  if (v0.total_count_ != v1.total_count_) {
+    return v0.total_count_ < v1.total_count_;
+  }
+  return v0.index_right_or_value_ > v1.index_right_or_value_;
+}
+0
+----------
+6
+CreateHuffmanTree(const uint32_t *data,
+                       const size_t length,
+                       const int tree_limit,
+                       HuffmanTree* tree,
+                       uint8_t *depth) {
+  for (uint32_t count_limit = 1; ; count_limit *= 2) {
+    size_t n = 0;
+    for (size_t i = length; i != 0;) {
+      --i;
+      if (data[i]) {
+        const uint32_t count = std::max<uint32_t>(data[i], count_limit);
+        tree[n++] = HuffmanTree(count, -1, static_cast<int16_t>(i));
+      }
+    }
+    if (n == 1) {
+      depth[tree[0].index_right_or_value_] = 1;     
+      break;
+    }
+    std::sort(tree, tree + n, SortHuffmanTree);
+    const HuffmanTree sentinel(~static_cast<uint32_t>(0), -1, -1);
+    tree[n] = sentinel;
+    tree[n + 1] = sentinel;
+    size_t i = 0;     
+    size_t j = n + 1;  
+    for (size_t k = n - 1; k != 0; --k) {
+      size_t left, right;
+      if (tree[i].total_count_ <= tree[j].total_count_) {
+        left = i;
+        ++i;
+      } else {
+        left = j;
+        ++j;
+      }
+      if (tree[i].total_count_ <= tree[j].total_count_) {
+        right = i;
+        ++i;
+      } else {
+        right = j;
+        ++j;
+      }
+      size_t j_end = 2 * n - k;
+      tree[j_end].total_count_ =
+          tree[left].total_count_ + tree[right].total_count_;
+      tree[j_end].index_left_ = static_cast<int16_t>(left);
+      tree[j_end].index_right_or_value_ = static_cast<int16_t>(right);
+      tree[j_end + 1] = sentinel;
+    }
+    if (SetDepth(static_cast<int>(2 * n - 1), &tree[0], depth, tree_limit)) {
+      break;
+    }
+  }
+}
+} 
+0
+----------
+7
+ColumnDct(coeff_t* in) {
+  for (int i = 0; i < 8; ++i) {
+    int m0, m1, m2, m3, m4, m5, m6, m7;
+    COLUMN_DCT8(in + i);
+  }
+}
+1
+----------
+8
+RowDct(coeff_t* in, const coeff_t* table) {
+  const int a0 = in[0] + in[7];
+  const int b0 = in[0] - in[7];
+  const int a1 = in[1] + in[6];
+  const int b1 = in[1] - in[6];
+  const int a2 = in[2] + in[5];
+  const int b2 = in[2] - in[5];
+  const int a3 = in[3] + in[4];
+  const int b3 = in[3] - in[4];
+  const int C2 = table[1];
+  const int C4 = table[3];
+  const int C6 = table[5];
+  const int c0 = a0 + a3;
+  const int c1 = a0 - a3;
+  const int c2 = a1 + a2;
+  const int c3 = a1 - a2;
+  in[0] = DESCALE(C4 * (c0 + c2));
+  in[4] = DESCALE(C4 * (c0 - c2));
+  in[2] = DESCALE(C2 * c1 + C6 * c3);
+  in[6] = DESCALE(C6 * c1 - C2 * c3);
+  const int C1 = table[0];
+  const int C3 = table[2];
+  const int C5 = table[4];
+  const int C7 = table[6];
+  in[1] = DESCALE(C1 * b0 + C3 * b1 + C5 * b2 + C7 * b3);
+  in[3] = DESCALE(C3 * b0 - C7 * b1 - C1 * b2 - C5 * b3);
+  in[5] = DESCALE(C5 * b0 - C1 * b1 + C7 * b2 + C3 * b3);
+  in[7] = DESCALE(C7 * b0 - C5 * b1 + C3 * b2 - C1 * b3);
+}
+1
+----------
+9
+InitJPEGDataForYUV444(int w, int h, JPEGData* jpg) {
+  jpg->width = w;
+  jpg->height = h;
+  jpg->max_h_samp_factor = 1;
+  jpg->max_v_samp_factor = 1;
+  jpg->MCU_rows = (h + 7) >> 3;
+  jpg->MCU_cols = (w + 7) >> 3;
+  jpg->quant.resize(3);
+  jpg->components.resize(3);
+  for (int i = 0; i < 3; ++i) {
+    JPEGComponent* c = &jpg->components[i];
+    c->id = i;
+    c->h_samp_factor = 1;
+    c->v_samp_factor = 1;
+    c->quant_idx = i;
+    c->width_in_blocks = jpg->MCU_cols;
+    c->height_in_blocks = jpg->MCU_rows;
+    c->num_blocks = c->width_in_blocks * c->height_in_blocks;
+    c->coeffs.resize(c->num_blocks * kDCTBlockSize);
+  }
+}
+0
+----------
+10
+SaveQuantTables(const int q[3][kDCTBlockSize], JPEGData* jpg) {
+  const size_t kTableSize = kDCTBlockSize * sizeof(q[0][0]);
+  jpg->quant.clear();
+  int num_tables = 0;
+  for (size_t i = 0; i < jpg->components.size(); ++i) {
+    JPEGComponent* comp = &jpg->components[i];
+    bool found = false;
+    for (int j = 0; j < num_tables; ++j) {
+      if (memcmp(&q[i][0], &jpg->quant[j].values[0], kTableSize) == 0) {
+        comp->quant_idx = j;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      JPEGQuantTable table;
+      memcpy(&table.values[0], &q[i][0], kTableSize);
+      table.precision = 0;
+      for (int k = 0; k < kDCTBlockSize; ++k) {
+        assert(table.values[k] >= 0);
+        assert(table.values[k] < (1 << 16));
+        if (table.values[k] > 0xff) {
+          table.precision = 1;
+        }
+      }
+      table.index = num_tables;
+      comp->quant_idx = num_tables;
+      jpg->quant.push_back(table);
+      ++num_tables;
+    }
+  }
+}
+0
+----------
+11
+HasYCbCrColorSpace(const JPEGData& jpg) {
+  bool has_Adobe_marker = false;
+  uint8_t Adobe_transform = 0;
+  for (const std::string& app : jpg.app_data) {
+    if (static_cast<uint8_t>(app[0]) == 0xe0) {
+      return true;
+    } else if (static_cast<uint8_t>(app[0]) == 0xee && app.size() >= 15) {
+      has_Adobe_marker = true;
+      Adobe_transform = app[14];
+    }
+  }
+  if (has_Adobe_marker) {
+    return (Adobe_transform != 0);
+  }
+  const int cid0 = jpg.components[0].id;
+  const int cid1 = jpg.components[1].id;
+  const int cid2 = jpg.components[2].id;
+  return (cid0 != 'R' || cid1 != 'G' || cid2 != 'B');
+}
+0
+----------
+12
+OutputImageComponent::Reset(int factor_x, int factor_y) {
+  factor_x_ = factor_x;
+  factor_y_ = factor_y;
+  width_in_blocks_ = (width_ + 8 * factor_x_ - 1) / (8 * factor_x_);
+  height_in_blocks_ = (height_ + 8 * factor_y_ - 1) / (8 * factor_y_);
+  num_blocks_ = width_in_blocks_ * height_in_blocks_;
+  coeffs_ = std::vector<coeff_t>(num_blocks_ * kDCTBlockSize);
+  pixels_ = std::vector<uint16_t>(width_ * height_, 128 << 4);
+  for (int i = 0; i < kDCTBlockSize; ++i) quant_[i] = 1;
+}
+1
+----------
+13
+RGBToYUV16(const uint8_t* const rgb,
+                              coeff_t *out) {
+  enum { FRAC = 16, HALF = 1 << (FRAC - 1) };
+  const int r = rgb[0];
+  const int g = rgb[1];
+  const int b = rgb[2];
+  out[0] = (19595 * r  + 38469 * g +  7471 * b - (128 << 16) + HALF) >> FRAC;
+  out[64] = (-11059 * r - 21709 * g + 32768 * b + HALF - 1) >> FRAC;
+  out[128] = (32768 * r  - 27439 * g -  5329 * b + HALF - 1) >> FRAC;
+}
+}
+1
+----------
+14
+EncodeRGBToJpeg(const std::vector<uint8_t>& rgb, int w, int h,
+                     const int* quant, JPEGData* jpg) {
+  if (w < 0 || w >= 1 << 16 || h < 0 || h >= 1 << 16 ||
+      rgb.size() != 3 * w * h) {
+    return false;
+  }
+  InitJPEGDataForYUV444(w, h, jpg);
+  AddApp0Data(jpg);
+  int iquant[3 * kDCTBlockSize];
+  int idx = 0;
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < kDCTBlockSize; ++j) {
+      int v = quant[idx];
+      jpg->quant[i].values[j] = v;
+      iquant[idx++] = ((1 << kIQuantBits) + 1) / v;
+    }
+  }
+  int block_ix = 0;
+  for (int block_y = 0; block_y < jpg->MCU_rows; ++block_y) {
+    for (int block_x = 0; block_x < jpg->MCU_cols; ++block_x) {
+      coeff_t block[3 * kDCTBlockSize];
+      for (int iy = 0; iy < 8; ++iy) {
+        for (int ix = 0; ix < 8; ++ix) {
+          int y = std::min(h - 1, 8 * block_y + iy);
+          int x = std::min(w - 1, 8 * block_x + ix);
+          int p = y * w + x;
+          RGBToYUV16(&rgb[3 * p], &block[8 * iy + ix]);
+        }
+      }
+      for (int i = 0; i < 3; ++i) {
+        ComputeBlockDCT(&block[i * kDCTBlockSize]);
+      }
+       for (int i = 0; i < 3 * 64; ++i) {
+        Quantize(&block[i], iquant[i]);
+      }
+      for (int i = 0; i < 3; ++i) {
+        memcpy(&jpg->components[i].coeffs[block_ix * kDCTBlockSize],
+               &block[i * kDCTBlockSize], kDCTBlockSize * sizeof(block[0]));
+      }
+      ++block_ix;
+    }
+  }
+  return true;
+}
+1
+----------
+15
+QuantizeBlock(coeff_t block[kDCTBlockSize],
+                   const int q[kDCTBlockSize]) {
+  bool changed = false;
+  for (int k = 0; k < kDCTBlockSize; ++k) {
+    coeff_t coeff = Quantize(block[k], q[k]);
+    changed = changed || (coeff != block[k]);
+    block[k] = coeff;
+  }
+  return changed;
+}
+1
+----------
+16
+ScoreJPEG(double butteraugli_distance, int size,
+                 double butteraugli_target) {
+  constexpr double kScale = 50;
+  constexpr double kMaxExponent = 10;
+  constexpr double kLargeSize = 1e30;
+  double diff = butteraugli_distance - butteraugli_target;
+  if (diff <= 0.0) {
+    return size;
+  } else {
+    double exponent = kScale * diff;
+    if (exponent > kMaxExponent) {
+      return kLargeSize * std::exp(kMaxExponent) * diff + size;
+    } else {
+      return std::exp(exponent) * size;
+    }
+  }
+}
+}
+0
+----------
+17
+darkmap(image[0].size(), false);
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      size_t index = y * w + x;
+      float y = yuv[0][index];
+      float u = yuv[1][index];
+      float v = yuv[2][index];
+      float r = y + 1.402f * v;
+      float g = y - 0.34414f * u - 0.71414f * v;
+      float b = y + 1.772f * u;
+      if (channel == 2 && g < 0.85 && b < 0.85 && r < 0.9) {
+        darkmap[index] = true;
+      }
+      if (channel == 1 && r < 0.85 && g < 0.85 && b < 0.9) {
+        darkmap[index] = true;
+      }
+    }
+  }
+1
+----------
+18
+Convolution(const ImageF& in,const std::vector<float>& kernel,const float border_ratio) {
+  ImageF out(in.ysize(), in.xsize());
+  const int len = kernel.size();
+  const int offset = kernel.size() / 2;
+  float weight_no_border = 0.0f;
+  for (int j = 0; j < len; ++j) {
+    weight_no_border += kernel[j];
+  }
+  float scale_no_border = 1.0f / weight_no_border;
+  const int border1 = in.xsize() <= offset ? in.xsize() : offset;
+  const int border2 = in.xsize() - offset;
+  std::vector<float> scaled_kernel = kernel;
+  for (int i = 0; i < scaled_kernel.size(); ++i) {
+    scaled_kernel[i] *= scale_no_border;
+  }
+  for (int x = 0; x < border1; ++x) {
+    ConvolveBorderColumn(in, kernel, weight_no_border, border_ratio, x,
+                         out.Row(x));
+  }
+  for (size_t y = 0; y < in.ysize(); ++y) {
+    const float* const BUTTERAUGLI_RESTRICT row_in = in.Row(y);
+    for (int x = border1; x < border2; ++x) {
+      const int d = x - offset;
+      float* const BUTTERAUGLI_RESTRICT row_out = out.Row(x);
+      float sum = 0.0f;
+      for (int j = 0; j < len; ++j) {
+        sum += row_in[d + j] * scaled_kernel[j];
+      }
+      row_out[y] = sum;
+    }
+  }
+  for (int x = border2; x < in.xsize(); ++x) {
+    ConvolveBorderColumn(in, kernel, weight_no_border, border_ratio, x,
+                         out.Row(x));
+  }
+  return out;
+}
+1
+----------
+19
+OpsinDynamicsImage(const std::vector<ImageF>& rgb) {
+  PROFILER_FUNC;
+  std::vector<ImageF> xyb(3);
+  std::vector<ImageF> blurred(3);
+  const double kSigma = 1.2;
+  for (int i = 0; i < 3; ++i) {
+    xyb[i] = ImageF(rgb[i].xsize(), rgb[i].ysize());
+    blurred[i] = Blur(rgb[i], kSigma, 0.0f);
+  }
+  for (size_t y = 0; y < rgb[0].ysize(); ++y) {
+    const float* const BUTTERAUGLI_RESTRICT row_r = rgb[0].Row(y);
+    const float* const BUTTERAUGLI_RESTRICT row_g = rgb[1].Row(y);
+    const float* const BUTTERAUGLI_RESTRICT row_b = rgb[2].Row(y);
+    const float* const BUTTERAUGLI_RESTRICT row_blurred_r = blurred[0].Row(y);
+    const float* const BUTTERAUGLI_RESTRICT row_blurred_g = blurred[1].Row(y);
+    const float* const BUTTERAUGLI_RESTRICT row_blurred_b = blurred[2].Row(y);
+    float* const BUTTERAUGLI_RESTRICT row_out_x = xyb[0].Row(y);
+    float* const BUTTERAUGLI_RESTRICT row_out_y = xyb[1].Row(y);
+    float* const BUTTERAUGLI_RESTRICT row_out_b = xyb[2].Row(y);
+    for (size_t x = 0; x < rgb[0].xsize(); ++x) {
+      float sensitivity[3];
+      {
+        float pre_mixed0, pre_mixed1, pre_mixed2;
+        OpsinAbsorbance(row_blurred_r[x], row_blurred_g[x], row_blurred_b[x],
+                        &pre_mixed0, &pre_mixed1, &pre_mixed2);
+        sensitivity[0] = Gamma(pre_mixed0) / pre_mixed0;
+        sensitivity[1] = Gamma(pre_mixed1) / pre_mixed1;
+        sensitivity[2] = Gamma(pre_mixed2) / pre_mixed2;
+      }
+      float cur_mixed0, cur_mixed1, cur_mixed2;
+      OpsinAbsorbance(row_r[x], row_g[x], row_b[x],
+                      &cur_mixed0, &cur_mixed1, &cur_mixed2);
+      cur_mixed0 *= sensitivity[0];
+      cur_mixed1 *= sensitivity[1];
+      cur_mixed2 *= sensitivity[2];
+      RgbToXyb(cur_mixed0, cur_mixed1, cur_mixed2,
+               &row_out_x[x], &row_out_y[x], &row_out_b[x]);
+    }
+  }
+  return xyb;
+}
+0
+----------
+20
+SuppressInBrightAreas(size_t xsize, size_t ysize,
+                                    double mul, double mul2, double reg,
+                                    const ImageF& hf,
+                                    const ImageF& brightness) {
+  ImageF inew(xsize, ysize);
+  for (size_t y = 0; y < ysize; ++y) {
+    const float* const rowhf = hf.Row(y);
+    const float* const rowbr = brightness.Row(y);
+    float* const rownew = inew.Row(y);
+    for (size_t x = 0; x < xsize; ++x) {
+      float v = rowhf[x];
+      float scaler = mul * reg / (reg + rowbr[x]);
+      rownew[x] = scaler * v;
+    }
+  }
+  return inew;
+}
+1
+----------
+21
+MaximumClamp(float v, float maxval) {
+  static const double kMul = 0.688059627878;
+  if (v >= maxval) {
+    v -= maxval;
+    v *= kMul;
+    v += maxval;
+  } else if (v < -maxval) {
+    v += maxval;
+    v *= kMul;
+    v -= maxval;
+  }
+  return v;
+}
+0
+----------
+22
+MaximumClamping(size_t xsize, size_t ysize, const ImageF& ix,
+                              double yw) {
+  static const double kMul = 0.688059627878;
+  ImageF inew(xsize, ysize);
+  for (size_t y = 0; y < ysize; ++y) {
+    const float* const rowx = ix.Row(y);
+    float* const rownew = inew.Row(y);
+    for (size_t x = 0; x < xsize; ++x) {
+      double v = rowx[x];
+      if (v >= yw) {
+        v -= yw;
+        v *= kMul;
+        v += yw;
+      } else if (v < -yw) {
+        v += yw;
+        v *= kMul;
+        v -= yw;
+      }
+      rownew[x] = v;
+    }
+  }
+  return inew;
+}
+0
+----------
+23
+sharpenmap(image[0].size(), 0);
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      size_t index = y * w + x;
+      sharpenmap[index] = redmap[index] && darkmap[index];
+    }
+  }
+  const double threshold = (channel == 2 ? 0.02 : 1.0) * 127.5;
+  static const double kEdgeMatrix[9] = {
+    0, -1, 0,
+    -1, 4, -1,
+    0, -1, 0
+  };
+  std::vector<bool> blurmap(image[0].size(), false);
+  std::vector<float> edge = Convolve2D(yuv[channel], w, h, kEdgeMatrix, 3);
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      size_t index = y * w + x;
+      float u = yuv[1][index];
+      float v = yuv[2][index];
+      if (sharpenmap[index]) continue;
+      if (!darkmap[index]) continue;
+      if (fabs(edge[index]) < threshold && v < -0.162 * u) {
+        blurmap[index] = true;
+      }
+    }
+  }
+  Erode(w, h, &blurmap);
+  Erode(w, h, &blurmap);
+  std::vector<float> sharpened = Sharpen(yuv[channel], w, h, sigma, amount);
+  std::vector<float> blurred = Blur(yuv[channel], w, h);
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      size_t index = y * w + x;
+      if (sharpenmap[index]) {
+        if (sharpen) yuv[channel][index] = sharpened[index];
+      } else if (blurmap[index]) {
+        if (blur) yuv[channel][index] = blurred[index];
+      }
+    }
+  }
+  for (size_t i = 0; i < yuv[0].size(); i++) {
+    yuv[0][i] *= 255.0;
+    yuv[1][i] = (yuv[1][i] + 0.5f) * 255.0f;
+    yuv[2][i] = (yuv[2][i] + 0.5f) * 255.0f;
+  }
+  return yuv;
+}
+1
+----------
+24
+L2Diff(const ImageF& i0, const ImageF& i1, const double w,
+                   ImageF* BUTTERAUGLI_RESTRICT diffmap) {
+  if (w == 0) {
+    return;
+  }
+  for (size_t y = 0; y < i0.ysize(); ++y) {
+    const float* BUTTERAUGLI_RESTRICT const row0 = i0.Row(y);
+    const float* BUTTERAUGLI_RESTRICT const row1 = i1.Row(y);
+    float* BUTTERAUGLI_RESTRICT const row_diff = diffmap->Row(y);
+    for (size_t x = 0; x < i0.xsize(); ++x) {
+      double diff = row0[x] - row1[x];
+      row_diff[x] += w * diff * diff;
+    }
+  }
+}
+0
+----------
+25
+L2DiffAsymmetric(const ImageF& i0, const ImageF& i1,
+                             double w_0gt1,
+                             double w_0lt1,
+                             ImageF* BUTTERAUGLI_RESTRICT diffmap) {
+  if (w_0gt1 == 0 && w_0lt1 == 0) {
+    return;
+  }
+  w_0gt1 *= 0.8;
+  w_0lt1 *= 0.8;
+  for (size_t y = 0; y < i0.ysize(); ++y) {
+    const float* BUTTERAUGLI_RESTRICT const row0 = i0.Row(y);
+    const float* BUTTERAUGLI_RESTRICT const row1 = i1.Row(y);
+    float* BUTTERAUGLI_RESTRICT const row_diff = diffmap->Row(y);
+    for (size_t x = 0; x < i0.xsize(); ++x) {
+      double diff = row0[x] - row1[x];
+      row_diff[x] += w_0gt1 * diff * diff;
+      const double fabs0 = fabs(row0[x]);
+      const double too_small = 0.4 * fabs0;
+      const double too_big = 1.0 * fabs0;
+      if (row0[x] < 0) {
+        if (row1[x] > -too_small) {
+          double v = row1[x] + too_small;
+          row_diff[x] += w_0lt1 * v * v;
+        } else if (row1[x] < -too_big) {
+          double v = -row1[x] - too_big;
+          row_diff[x] += w_0lt1 * v * v;
+        }
+      } else {
+        if (row1[x] < too_small) {
+          double v = too_small - row1[x];
+          row_diff[x] += w_0lt1 * v * v;
+        } else if (row1[x] > too_big) {
+          double v = row1[x] - too_big;
+          row_diff[x] += w_0lt1 * v * v;
+        }
+      }
+    }
+  }
+}
+0
+----------
+26
+CalculateDiffmap(const ImageF& diffmap_in) {
+  PROFILER_FUNC;
+  ImageF diffmap(diffmap_in.xsize(), diffmap_in.ysize());
+  static const float kInitialSlope = 100.0f;
+  for (size_t y = 0; y < diffmap.ysize(); ++y) {
+    const float* const BUTTERAUGLI_RESTRICT row_in = diffmap_in.Row(y);
+    float* const BUTTERAUGLI_RESTRICT row_out = diffmap.Row(y);
+    for (size_t x = 0; x < diffmap.xsize(); ++x) {
+      const float orig_val = row_in[x];
+      row_out[x] = (orig_val < (1.0f / (kInitialSlope * kInitialSlope))
+                    ? kInitialSlope * orig_val
+                    : std::sqrt(orig_val));
+    }
+  }
+  {
+    static const double kSigma = 1.72547472444;
+    static const double mul1 = 0.458794906198;
+    static const float scale = 1.0f / (1.0f + mul1);
+    static const double border_ratio = 1.0; 
+    ImageF blurred = Blur(diffmap, kSigma, border_ratio);
+    for (int y = 0; y < diffmap.ysize(); ++y) {
+      const float* const BUTTERAUGLI_RESTRICT row_blurred = blurred.Row(y);
+      float* const BUTTERAUGLI_RESTRICT row = diffmap.Row(y);
+      for (int x = 0; x < diffmap.xsize(); ++x) {
+        row[x] += mul1 * row_blurred[x];
+        row[x] *= scale;
+      }
+    }
+  }
+  return diffmap;
+}
+0
+----------
+27
+MaskPsychoImage(const PsychoImage& pi0, const PsychoImage& pi1,
+                     const size_t xsize, const size_t ysize,
+                     std::vector<ImageF>* BUTTERAUGLI_RESTRICT mask,
+                     std::vector<ImageF>* BUTTERAUGLI_RESTRICT mask_dc) {
+  std::vector<ImageF> mask_xyb0 = CreatePlanes<float>(xsize, ysize, 3);
+  std::vector<ImageF> mask_xyb1 = CreatePlanes<float>(xsize, ysize, 3);
+  static const double muls[4] = {
+    0,
+    1.64178305129,
+    0.831081703362,
+    3.23680933546,
+  };
+  for (int i = 0; i < 2; ++i) {
+    double a = muls[2 * i];
+    double b = muls[2 * i + 1];
+    for (size_t y = 0; y < ysize; ++y) {
+      const float* const BUTTERAUGLI_RESTRICT row_hf0 = pi0.hf[i].Row(y);
+      const float* const BUTTERAUGLI_RESTRICT row_hf1 = pi1.hf[i].Row(y);
+      const float* const BUTTERAUGLI_RESTRICT row_uhf0 = pi0.uhf[i].Row(y);
+      const float* const BUTTERAUGLI_RESTRICT row_uhf1 = pi1.uhf[i].Row(y);
+      float* const BUTTERAUGLI_RESTRICT row0 = mask_xyb0[i].Row(y);
+      float* const BUTTERAUGLI_RESTRICT row1 = mask_xyb1[i].Row(y);
+      for (size_t x = 0; x < xsize; ++x) {
+        row0[x] = a * row_uhf0[x] + b * row_hf0[x];
+        row1[x] = a * row_uhf1[x] + b * row_hf1[x];
+      }
+    }
+  }
+  Mask(mask_xyb0, mask_xyb1, mask, mask_dc);
+}
+0
+----------
+28
+DiffPrecompute(const ImageF& xyb0, const ImageF& xyb1) {
+  PROFILER_FUNC;
+  const size_t xsize = xyb0.xsize();
+  const size_t ysize = xyb0.ysize();
+  ImageF result(xsize, ysize);
+  size_t x2, y2;
+  for (size_t y = 0; y < ysize; ++y) {
+    if (y + 1 < ysize) {
+      y2 = y + 1;
+    } else if (y > 0) {
+      y2 = y - 1;
+    } else {
+      y2 = y;
+    }
+    const float* const BUTTERAUGLI_RESTRICT row0_in = xyb0.Row(y);
+    const float* const BUTTERAUGLI_RESTRICT row1_in = xyb1.Row(y);
+    const float* const BUTTERAUGLI_RESTRICT row0_in2 = xyb0.Row(y2);
+    const float* const BUTTERAUGLI_RESTRICT row1_in2 = xyb1.Row(y2);
+    float* const BUTTERAUGLI_RESTRICT row_out = result.Row(y);
+    for (size_t x = 0; x < xsize; ++x) {
+      if (x + 1 < xsize) {
+        x2 = x + 1;
+      } else if (x > 0) {
+        x2 = x - 1;
+      } else {
+        x2 = x;
+      }
+      double sup0 = (fabs(row0_in[x] - row0_in[x2]) +
+                     fabs(row0_in[x] - row0_in2[x]));
+      double sup1 = (fabs(row1_in[x] - row1_in[x2]) +
+                     fabs(row1_in[x] - row1_in2[x]));
+      static const double mul0 = 0.918416534734;
+      row_out[x] = mul0 * std::min(sup0, sup1);
+      static const double cutoff = 55.0184555849;
+      if (row_out[x] >= cutoff) {
+        row_out[x] = cutoff;
+      }
+    }
+  }
+  return result;
+}
+0
+----------
+29
+ ButteraugliAdaptiveQuantization(size_t xsize, size_t ysize,
+    const std::vector<std::vector<float> > &rgb, std::vector<float> &quant) {
+  if (xsize < 16 || ysize < 16) {
+    return false;  
+  }
+  size_t size = xsize * ysize;
+  std::vector<ImageF> rgb_planes = PlanesFromPacked(xsize, ysize, rgb);
+  std::vector<ImageF> scale_xyb;
+  std::vector<ImageF> scale_xyb_dc;
+  Mask(rgb_planes, rgb_planes, &scale_xyb, &scale_xyb_dc);
+  quant.reserve(size);
+  for (size_t y = 0; y < ysize; ++y) {
+    for (size_t x = 0; x < xsize; ++x) {
+      quant.push_back(scale_xyb[1].Row(y)[x]);
+    }
+  }
+  return true;
+}
+1
+----------
+30
+ButteraugliFuzzyClass(double score) {
+  static const double fuzzy_width_up = 6.07887388532;
+  static const double fuzzy_width_down = 5.50793514384;
+  static const double m0 = 2.0;
+  static const double scaler = 0.840253347958;
+  double val;
+  if (score < 1.0) {
+    val = m0 / (1.0 + exp((score - 1.0) * fuzzy_width_down));
+    val -= 1.0;  // from [1 .. 2] to [0 .. 1]
+    val *= 2.0 - scaler;  // from [0 .. 1] to [0 .. 2.0 - scaler]
+    val += scaler;  // from [0 .. 2.0 - scaler] to [scaler .. 2.0]
+  } else {
+    val = m0 / (1.0 + exp((score - 1.0) * fuzzy_width_up));
+    val *= scaler;
+  }
+  return val;
+}
+0
+----------
+31
+ButteraugliFuzzyInverse(double seek) {
+  double pos = 0;
+  for (double range = 1.0; range >= 1e-10; range *= 0.5) {
+    double cur = ButteraugliFuzzyClass(pos);
+    if (cur < seek) {
+      pos -= range;
+    } else {
+      pos += range;
+    }
+  }
+  return pos;
+}
+1
+----------
+32
+ScoreToRgb(double score, double good_threshold, double bad_threshold,
+                uint8_t rgb[3]) {
+  double heatmap[12][3] = {
+      {0, 0, 0},
+      {0, 0, 1},
+      {0, 1, 1},
+      {0, 1, 0},  
+      {1, 1, 0},
+      {1, 0, 0},  
+      {1, 0, 1},
+      {0.5, 0.5, 1.0},
+      {1.0, 0.5, 0.5},  
+      {1.0, 1.0, 0.5},
+      {
+          1, 1, 1,
+      },
+      {
+          1, 1, 1,
+      },
+  };
+  if (score < good_threshold) {
+    score = (score / good_threshold) * 0.3;
+  } else if (score < bad_threshold) {
+    score = 0.3 +
+            (score - good_threshold) / (bad_threshold - good_threshold) * 0.15;
+  } else {
+    score = 0.45 + (score - bad_threshold) / (bad_threshold * 12) * 0.5;
+  }
+  static const int kTableSize = sizeof(heatmap) / sizeof(heatmap[0]);
+  score = std::min<double>(std::max<double>(score * (kTableSize - 1), 0.0),
+                           kTableSize - 2);
+  int ix = static_cast<int>(score);
+  double mix = score - ix;
+  for (int i = 0; i < 3; ++i) {
+    double v = mix * heatmap[ix + 1][i] + (1 - mix) * heatmap[ix][i];
+    rgb[i] = static_cast<uint8_t>(255 * pow(v, 0.5) + 0.5);
+  }
+}
+1
+----------
+33
+CreateHeatMapImage(const std::vector<float>& distmap,
+                        double good_threshold, double bad_threshold,
+                        size_t xsize, size_t ysize,
+                        std::vector<uint8_t>* heatmap) {
+  heatmap->resize(3 * xsize * ysize);
+  for (size_t y = 0; y < ysize; ++y) {
+    for (size_t x = 0; x < xsize; ++x) {
+      int px = xsize * y + x;
+      double d = distmap[px];
+      uint8_t* rgb = &(*heatmap)[3 * px];
+      ScoreToRgb(d, good_threshold, bad_threshold, rgb);
+    }
+  }
+}
+0
+----------
+34
+get_24bit_row (j_compress_ptr cinfo, cjpeg_source_ptr sinfo)
+{
+  tga_source_ptr source = (tga_source_ptr) sinfo;
+  register JSAMPROW ptr;
+  register JDIMENSION col;
+  ptr = source->pub.buffer[0];
+  for (col = cinfo->image_width; col > 0; col--) {
+    (*source->read_pixel) (source); 
+    *ptr++ = (JSAMPLE) UCH(source->tga_pixel[2]); 
+    *ptr++ = (JSAMPLE) UCH(source->tga_pixel[1]);
+    *ptr++ = (JSAMPLE) UCH(source->tga_pixel[0]);
+  }
+  return 1;
+}
+0
+----------
+35
+ButteraugliScoreForQuality(double quality) {
+  if (quality < kLowestQuality) quality = kLowestQuality;
+  if (quality > kHighestQuality) quality = kHighestQuality;
+  int index = static_cast<int>(quality);
+  double mix = quality - index;
+  return kScoreForQuality[index - kLowestQuality] * (1 - mix) +
+      kScoreForQuality[index - kLowestQuality + 1] * mix;
+}
+0
+----------
+36
+OutputImageComponent::IsAllZero() const {
+  int numcoeffs = num_blocks_ * kDCTBlockSize;
+  for (int i = 0; i < numcoeffs; ++i) {
+    if (coeffs_[i] != 0) return false;
+  }
+  return true;
+}
+1
+----------
+37
+OutputImageComponent::ToPixels(int xmin, int ymin, int xsize, int ysize,
+                                    uint8_t* out, int stride) const {
+  assert(xmin >= 0);
+  assert(ymin >= 0);
+  assert(xmin < width_);
+  assert(ymin < height_);
+  const int yend1 = ymin + ysize;
+  const int yend0 = std::min(yend1, height_);
+  int y = ymin;
+  for (; y < yend0; ++y) {
+    const int xend1 = xmin + xsize;
+    const int xend0 = std::min(xend1, width_);
+    int x = xmin;
+    int px = y * width_ + xmin;
+    for (; x < xend0; ++x, ++px, out += stride) {
+      *out = static_cast<uint8_t>((pixels_[px] + 8 - (x & 1)) >> 4);
+    }
+    const int offset = -stride;
+    for (; x < xend1; ++x) {
+      *out = out[offset];
+      out += stride;
+    }
+  }
+  for (; y < yend1; ++y) {
+    const int offset = -stride * xsize;
+    for (int x = 0; x < xsize; ++x) {
+      *out = out[offset];
+      out += stride;
+    }
+  }
+}
+1
+----------
+38
+OutputImageComponent::ToFloatPixels(float* out, int stride) const {
+  assert(factor_x_ == 1);
+  assert(factor_y_ == 1);
+  for (int block_y = 0; block_y < height_in_blocks_; ++block_y) {
+    for (int block_x = 0; block_x < width_in_blocks_; ++block_x) {
+      coeff_t block[kDCTBlockSize];
+      GetCoeffBlock(block_x, block_y, block);
+      double blockd[kDCTBlockSize];
+      for (int k = 0; k < kDCTBlockSize; ++k) {
+        blockd[k] = block[k];
+      }
+      ComputeBlockIDCTDouble(blockd);
+      for (int iy = 0; iy < 8; ++iy) {
+        for (int ix = 0; ix < 8; ++ix) {
+          int y = block_y * 8 + iy;
+          int x = block_x * 8 + ix;
+          if (y >= height_ || x >= width_) continue;
+          out[(y * width_ + x) * stride] = static_cast<float>(blockd[8 * iy + ix] + 128.0);
+        }
+      }
+    }
+  }
+}
+1
+----------
+39
+OutputImageComponent::CopyFromJpegComponent(const JPEGComponent& comp,
+                                                 int factor_x, int factor_y,
+                                                 const int* quant) {
+  Reset(factor_x, factor_y);
+  assert(width_in_blocks_ <= comp.width_in_blocks);
+  assert(height_in_blocks_ <= comp.height_in_blocks);
+  const size_t src_row_size = comp.width_in_blocks * kDCTBlockSize;
+  for (int block_y = 0; block_y < height_in_blocks_; ++block_y) {
+    const coeff_t* src_coeffs = &comp.coeffs[block_y * src_row_size];
+    for (int block_x = 0; block_x < width_in_blocks_; ++block_x) {
+      coeff_t block[kDCTBlockSize];
+      for (int i = 0; i < kDCTBlockSize; ++i) {
+        block[i] = src_coeffs[i] * quant[i];
+      }
+      SetCoeffBlock(block_x, block_y, block);
+      src_coeffs += kDCTBlockSize;
+    }
+  }
+  memcpy(quant_, quant, sizeof(quant_));
+}
+1
+----------
+40
+OutputImageComponent::ApplyGlobalQuantization(const int q[kDCTBlockSize]) {
+  for (int block_y = 0; block_y < height_in_blocks_; ++block_y) {
+    for (int block_x = 0; block_x < width_in_blocks_; ++block_x) {
+      coeff_t block[kDCTBlockSize];
+      GetCoeffBlock(block_x, block_y, block);
+      if (QuantizeBlock(block, q)) {
+        SetCoeffBlock(block_x, block_y, block);
+      }
+    }
+  }
+  memcpy(quant_, q, sizeof(quant_));
+}
+1
+----------
+41
+OutputImage::CopyFromJpegData(const JPEGData& jpg) {
+  for (size_t i = 0; i < jpg.components.size(); ++i) {
+    const JPEGComponent& comp = jpg.components[i];
+    assert(jpg.max_h_samp_factor % comp.h_samp_factor == 0);
+    assert(jpg.max_v_samp_factor % comp.v_samp_factor == 0);
+    int factor_x = jpg.max_h_samp_factor / comp.h_samp_factor;
+    int factor_y = jpg.max_v_samp_factor / comp.v_samp_factor;
+    assert(comp.quant_idx < jpg.quant.size());
+    components_[i].CopyFromJpegComponent(comp, factor_x, factor_y,
+                                         &jpg.quant[comp.quant_idx].values[0]);
+  }
+}
+1
+----------
+42
+OutputImage::ToSRGB(int xmin, int ymin,
+                                         int xsize, int ysize) const {
+  std::vector<uint8_t> rgb(xsize * ysize * 3);
+  for (int c = 0; c < 3; ++c) {
+    components_[c].ToPixels(xmin, ymin, xsize, ysize, &rgb[c], 3);
+  }
+  for (size_t p = 0; p < rgb.size(); p += 3) {
+    ColorTransformYCbCrToRGB(&rgb[p]);
+  }
+  return rgb;
+}
+1
+----------
+43
+OutputImage::ToLinearRGB(int xmin, int ymin, int xsize, int ysize,
+                              std::vector<std::vector<float> >* rgb) const {
+  const double* lut = Srgb8ToLinearTable();
+  std::vector<uint8_t> rgb_pixels = ToSRGB(xmin, ymin, xsize, ysize);
+  for (int p = 0; p < xsize * ysize; ++p) {
+    for (int i = 0; i < 3; ++i) {
+      (*rgb)[i][p] = static_cast<float>(lut[rgb_pixels[3 * p + i]]);
+    }
+  }
+}
+1
+----------
+44
+OutputImage::ToLinearRGB(std::vector<std::vector<float> >* rgb) const {
+  ToLinearRGB(0, 0, width_, height_, rgb);
+}
+
+std::string OutputImage::FrameTypeStr() const {
+  char buf[128];
+  int len = snprintf(buf, sizeof(buf), "f%d%d%d%d%d%d",
+                     component(0).factor_x(), component(0).factor_y(),
+                     component(1).factor_x(), component(1).factor_y(),
+                     component(2).factor_x(), component(2).factor_y());
+  return std::string(buf, len);
+}
+1
+----------
+45
+Convolve2D(const std::vector<float>& image, int w, int h,
+                              const double* kernel, int size) {
+  auto result = image;
+  int size2 = size / 2;
+  for (size_t i = 0; i < image.size(); i++) {
+    int x = i % w;
+    int y = i / w;
+    if (x < size2 || x + size - size2 - 1 >= w
+        || y < size2 || y + size - size2 - 1 >= h) {
+      continue;
+    }
+    float v = 0;
+    for (int j = 0; j < size * size; j++) {
+      int x2 = x + j % size - size2;
+      int y2 = y + j / size - size2;
+      v += static_cast<float>(kernel[j]) * image[y2 * w + x2];
+    }
+    result[i] = v;
+  }
+  return result;
+}
+1
+----------
+46
+OutputImageComponent::Reset(int factor_x, int factor_y) {
+  factor_x_ = factor_x;
+  factor_y_ = factor_y;
+  width_in_blocks_ = (width_ + 8 * factor_x_ - 1) / (8 * factor_x_);
+  height_in_blocks_ = (height_ + 8 * factor_y_ - 1) / (8 * factor_y_);
+  num_blocks_ = width_in_blocks_ * height_in_blocks_;
+  coeffs_ = std::vector<coeff_t>(num_blocks_ * kDCTBlockSize);
+  pixels_ = std::vector<uint16_t>(width_ * height_, 128 << 4);
+  for (int i = 0; i < kDCTBlockSize; ++i) quant_[i] = 1;
+}
+1
+----------
+47
+sharpenmap(image[0].size(), 0);
+  for (int y = 0; y < h; y++) {
+    for (int x = 0; x < w; x++) {
+      size_t index = y * w + x;
+      sharpenmap[index] = redmap[index] && darkmap[index];
+    }
+  }
+1
+----------
+48
+ClusterHistograms(JpegHistogram* histo, size_t* num,int* histo_indexes, uint8_t* depth) {
+  memset(depth, 0, *num * JpegHistogram::kSize);
+  size_t costs[kMaxComponents];
+  for (size_t i = 0; i < *num; ++i) {
+    histo_indexes[i] = i;
+    std::vector<HuffmanTree> tree(2 * JpegHistogram::kSize + 1);
+    CreateHuffmanTree(histo[i].counts, JpegHistogram::kSize,
+                      kJpegHuffmanMaxBitLength, &tree[0],
+                      &depth[i * JpegHistogram::kSize]);
+    costs[i] = (HistogramHeaderCost(histo[i]) +
+                HistogramEntropyCost(histo[i],
+                                     &depth[i * JpegHistogram::kSize]));
+  }
+  const size_t orig_num = *num;
+  while (*num > 1) {
+    size_t last = *num - 1;
+    size_t second_last = *num - 2;
+    JpegHistogram combined(histo[last]);
+    combined.AddHistogram(histo[second_last]);
+    std::vector<HuffmanTree> tree(2 * JpegHistogram::kSize + 1);
+    uint8_t depth_combined[JpegHistogram::kSize] = { 0 };
+    CreateHuffmanTree(combined.counts, JpegHistogram::kSize,
+                      kJpegHuffmanMaxBitLength, &tree[0], depth_combined);
+    size_t cost_combined = (HistogramHeaderCost(combined) +
+                            HistogramEntropyCost(combined, depth_combined));
+    if (cost_combined < costs[last] + costs[second_last]) {
+      histo[second_last] = combined;
+      histo[last] = JpegHistogram();
+      costs[second_last] = cost_combined;
+      memcpy(&depth[second_last * JpegHistogram::kSize], depth_combined,
+             sizeof(depth_combined));
+      for (size_t i = 0; i < orig_num; ++i) {
+        if (histo_indexes[i] == last) {
+          histo_indexes[i] = second_last;
+        }
+      }
+      --(*num);
+    } else {
+      break;
+    }
+  }
+  size_t total_cost = 0;
+  for (size_t i = 0; i < *num; ++i) {
+    total_cost += costs[i];
+  }
+  return (total_cost + 7) / 8;
+}
+
+0
+----------
+49
+OutputImage::ApplyGlobalQuantization(const int q[3][kDCTBlockSize]) {
+  for (int c = 0; c < 3; ++c) {
+    components_[c].ApplyGlobalQuantization(&q[c][0]);
+  }
+}
+1
+----------
+50
+EstimateJpegDataSize(const int num_components,
+                            const std::vector<JpegHistogram>& histograms) {
+  assert(histograms.size() == 2 * num_components);
+  std::vector<JpegHistogram> clustered = histograms;
+  size_t num_dc = num_components;
+  size_t num_ac = num_components;
+  int indexes[kMaxComponents];
+  uint8_t depth[kMaxComponents * JpegHistogram::kSize];
+  return (ClusterHistograms(&clustered[0], &num_dc, indexes, depth) +
+          ClusterHistograms(&clustered[num_components], &num_ac, indexes,
+                            depth));
+}
+0
+----------
